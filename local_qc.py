@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
-import tkinter as tk
-from tkinter import filedialog
 
-# 1. 定义标准后缀列表
+# 1. 定义标准后缀列表 (完整版)
 REQUIRED_SUFFIXES = [
     "a100-1", "a100-1.10", "a100-1.10w", "a100-1.11", "a100-1.11-m", "a100-1.11-pt", "a100-1.11-ptw", "a100-1.11w", 
     "a100-1.12", "a100-1.12-m", "a100-1.12w", "a100-1.13", "a100-1.13-m", "a100-1.13w", "a100-1.14", "a100-1.14-m", 
@@ -29,48 +27,43 @@ REQUIRED_SUFFIXES = [
     "a100-2.5-mw", "m100-1.2-fw", "f1-fw", "f2-fw", "f3-fw", "f4-fw", "f5-fw", "f6-fw", "f7-fw", "f8-fw", "f9-fw"
 ]
 
-def scan_local_folder(root_path):
-    """直接扫描本地物理路径"""
+def check_naming(uploaded_files):
     results = []
+    package_groups = {}
     
-    # 获取根目录下所有的子文件夹
-    try:
-        packages = [f for f in os.listdir(root_path) if os.path.isdir(os.path.join(root_path, f))]
-        if not packages:
-            # 如果根目录下全是文件，则把根目录本身当做一个图包处理
-            packages = ["."]
-    except Exception as e:
-        st.error(f"无法读取路径: {e}")
-        return None
+    # 模拟文件夹分组
+    for file in uploaded_files:
+        # Streamlit 上传多文件时 file.name 包含相对路径
+        parts = file.name.split('/')
+        pkg_name = parts[0] if len(parts) > 1 else "根目录"
+        if pkg_name not in package_groups:
+            package_groups[pkg_name] = []
+        package_groups[pkg_name].append(file.name)
 
-    for pkg in packages:
-        pkg_full_path = os.path.join(root_path, pkg)
+    for pkg_name, file_paths in package_groups.items():
         found_suffixes = set()
         naming_errors = []
         
-        # 遍历图包内的所有文件（包括子文件夹）
-        for root, dirs, files in os.walk(pkg_full_path):
-            for file in files:
-                if file.startswith('.'): continue # 跳过隐藏文件
-                
-                name_without_ext = os.path.splitext(file)[0]
-                
-                matched = False
-                for suffix in REQUIRED_SUFFIXES:
-                    if name_without_ext.endswith(suffix):
-                        found_suffixes.add(suffix)
-                        matched = True
-                        break
-                
-                if not matched:
-                    naming_errors.append(file)
+        for path in file_paths:
+            full_filename = os.path.basename(path)
+            if full_filename.startswith('.'): continue # 跳过隐藏文件
+            
+            name_without_ext = os.path.splitext(full_filename)[0]
+            matched = False
+            for suffix in REQUIRED_SUFFIXES:
+                if name_without_ext.endswith(suffix):
+                    found_suffixes.add(suffix)
+                    matched = True
+                    break
+            
+            if not matched:
+                naming_errors.append(full_filename)
 
         missing_suffixes = [s for s in REQUIRED_SUFFIXES if s not in found_suffixes]
-        
         status = "正确" if not missing_suffixes and not naming_errors else "图片命名有误，请人工核查"
-        
+            
         results.append({
-            "第一层图报名": pkg if pkg != "." else os.path.basename(root_path),
+            "第一层图报名": pkg_name,
             "校验结果": status,
             "缺失图片后缀": " | ".join(missing_suffixes) if missing_suffixes else "无",
             "命名错误图片": " | ".join(naming_errors) if naming_errors else "无"
@@ -78,44 +71,21 @@ def scan_local_folder(root_path):
         
     return pd.DataFrame(results)
 
-# --- UI 界面 ---
-st.set_page_config(page_title="本地图包质检工具", layout="wide")
-st.title("🏠 本地图包命名一键质检")
+# --- 界面展示 ---
+st.set_page_config(page_title="图包命名在线质检", layout="wide")
+st.title("📸 图包命名在线质检")
+st.markdown("⚠️ **注意：** 在线版请直接拖入文件夹或选中所有图片。")
 
-# 文件夹选择逻辑
-st.markdown("### 第一步：指定本地图包目录")
-st.info("说明：请在下方输入文件夹的完整路径，或者点击按钮选择。如果是多包质检，请输入包含多个图包文件夹的那个父目录。")
+# 使用 Streamlit 原生上传组件
+uploaded_files = st.file_uploader("请在此处拖入图包文件夹", accept_multiple_files=True)
 
-# 原生文件夹选择框
-if 'folder_path' not in st.session_state:
-    st.session_state.folder_path = ""
-
-col1, col2 = st.columns([4, 1])
-with col1:
-    target_path = st.text_input("本地路径 (例如 D:/Work/Images)", value=st.session_state.folder_path)
-with col2:
-    if st.button("📁 选择文件夹"):
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True) # 确保弹出框在最前面
-        selected_path = filedialog.askdirectory(master=root)
-        root.destroy()
-        if selected_path:
-            st.session_state.folder_path = selected_path
-            st.rerun()
-
-# 校验按钮
-if target_path:
-    if st.button("🔍 开始质检", type="primary"):
-        if os.path.exists(target_path):
-            with st.spinner('正在扫描本地文件...'):
-                df_result = scan_local_folder(target_path)
-                if df_result is not None:
-                    st.subheader("📋 质检报告")
-                    st.dataframe(df_result, use_container_width=True)
-                    
-                    # 导出报告
-                    csv = df_result.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button("导出报告 (CSV)", data=csv, file_name='local_qc_report.csv')
-        else:
-            st.error("路径不存在，请检查输入的路径是否正确。")
+if uploaded_files:
+    st.info(f"已识别到 {len(uploaded_files)} 个文件。")
+    if st.button("🚀 开始校验"):
+        with st.spinner('分析中...'):
+            df_result = check_naming(uploaded_files)
+            st.subheader("📊 校验报告")
+            st.dataframe(df_result, use_container_width=True)
+            
+            csv = df_result.to_csv(index=False).encode('utf-8-sig')
+            st.download_button("下载结果表 (CSV)", data=csv, file_name='qc_report.csv')
